@@ -55,7 +55,7 @@ function remainingSeconds(session) {
   return Math.max(0, Math.ceil(WAIT_SECONDS - elapsed));
 }
 
-// APIs
+// Rotas da API (sem servir HTML, a Vercel cuida disso)
 app.post('/api/start', rateLimit(10, 60 * 60 * 1000), (req, res) => {
   const token = crypto.randomBytes(16).toString('hex');
   sessions.set(token, { startedAt: Date.now(), key: null });
@@ -102,9 +102,4 @@ function validateHandler(req, res) {
 app.post('/api/validate', rateLimit(60, 60 * 1000), validateHandler);
 app.get('/api/validate', rateLimit(60, 60 * 1000), validateHandler);
 
-// Necessário para a Vercel
 module.exports = app;
-
-if (require.main === module) {
-  app.listen(3000, '0.0.0.0', () => console.log('Zenix rodando'));
-}
