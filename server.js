@@ -1,5 +1,6 @@
 const express = require('express');
 const crypto = require('crypto');
+const path = require('path');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -55,7 +56,11 @@ function remainingSeconds(session) {
   return Math.max(0, Math.ceil(WAIT_SECONDS - elapsed));
 }
 
-// Rotas da API (sem servir HTML, a Vercel cuida disso)
+// Servir os arquivos HTML
+app.use(express.static(path.join(__dirname, 'public')));
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+
+// APIs
 app.post('/api/start', rateLimit(10, 60 * 60 * 1000), (req, res) => {
   const token = crypto.randomBytes(16).toString('hex');
   sessions.set(token, { startedAt: Date.now(), key: null });
