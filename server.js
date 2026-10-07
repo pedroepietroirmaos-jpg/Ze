@@ -1,9 +1,4 @@
-const express = require('express');
 const crypto = require('crypto');
-const path = require('path');
-
-const app = express();
-app.set('trust proxy', 1);
 
 const WAIT_SECONDS = 10;
 const KEY_TTL_MS = 3 * 24 * 60 * 60 * 1000;
@@ -56,55 +51,57 @@ function remainingSeconds(session) {
   return Math.max(0, Math.ceil(WAIT_SECONDS - elapsed));
 }
 
-// Servir os arquivos HTML
-app.use(express.static(path.join(__dirname, 'public')));
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
-
-// APIs
-app.post('/api/start', rateLimit(10, 60 * 60 * 1000), (req, res) => {
-  const token = crypto.randomBytes(16).toString('hex');
-  sessions.set(token, { startedAt: Date.now(), key: null });
-  res.json({ ok: true, token });
-});
-
-app.get('/api/status', (req, res) => {
-  const session = sessions.get(req.query.t);
-  if (!session) return res.status(403).json({ ok: false });
-  res.json({ ok: true, remaining: remainingSeconds(session), total: WAIT_SECONDS });
-});
-
-app.get('/api/claim', (req, res) => {
-  const session = sessions.get(req.query.t);
-  if (!session) return res.status(403).json({ ok: false, message: 'Sessão inválida.' });
-  const remaining = remainingSeconds(session);
-  if (remaining > 0) return res.status(425).json({ ok: false, remaining });
-
-  if (session.key && db.keys[session.key]) return res.json({ ok: true, key: session.key, expiresAt: db.keys[session.key].expiresAt });
-
-  const agora = Date.now();
-  const key = generateKey();
-  db.keys[key] = { createdAt: new Date(agora).toISOString(), expiresAt: new Date(agora + KEY_TTL_MS).toISOString(), used: false, hwid: null };
-  saveDB(db); session.key = key;
-  res.json({ ok: true, key, expiresAt: db.keys[key].expiresAt });
-});
-
-function validateHandler(req, res) {
-  const key = String(req.query.key || '').trim();
-  const hwid = req.query.hwid ? String(req.query.hwid).trim().slice(0, 128) : null;
-  if (!/^Zenix-[A-Z0-9]{6}$/.test(key)) return res.json({ valid: false, message: 'Formato de chave inválido.' });
-
-  const entry = db.keys[key];
-  if (!entry) return res.json({ valid: false, message: 'Chave não encontrada.' });
-  if (Date.now() > new Date(entry.expiresAt).getTime()) return res.json({ valid: false, message: 'Esta chave expirou (3 dias). Pegue uma nova no site.' });
-
-  if (hwid) {
-    if (entry.hwid && entry.hwid !== hwid) return res.json({ valid: false, message: 'Chave vinculada a outro dispositivo.' });
-    if (!entry.hwid) { entry.hwid = hwid; entry.used = true; saveDB(db); }
+module.exports = (req, res) => {
+  // Rota de início
+  if (req.url === '/api/start' && req.method === 'POST') {
+    const token = crypto.randomBytes(16).toString('hex');
+    sessions.set(token, { startedAt: Date.now(), key: null });
+    return res.status(200).json({ ok: true, token });
   }
-  return res.json({ valid: true, message: 'Chave aceita!', expiresAt: entry.expiresAt });
-}
 
-app.post('/api/validate', rateLimit(60, 60 * 1000), validateHandler);
-app.get('/api/validate', rateLimit(60, 60 * 1000), validateHandler);
+  // Rota de status do cronômetro
+  if (req.url.startsWith('/api/status') && req.method === 'GET') {
+    const token = new URL(req.url, 'http://localhost').searchParams.get('t');
+    const session = sessions.get(token);
+    if (!session) return res.status(403).json({ ok: false });
+    return res.status(200).json({ ok: true, remaining: remainingSeconds(session), total: WAIT_SECONDS });
+  }
 
-module.exports = app;
+  // Rota para pegar a chave
+  if (req.url.startsWith('/api/claim') && req.method === 'GET') {
+    const token = new URL(req.url, 'http://localhost').searchParams.get('t');
+    const session = sessions.get(token);
+    if (!session) return res.status(403).json({ ok: false, message: 'Sessão inválida.' });
+    const remaining = remainingSeconds(session);
+    if (remaining > 0) return res.status(425).json({ ok: false, remaining });
+
+    if (session.key && db.keys[session.key]) return res.status(200).json({ ok: true, key: session.key, expiresAt: db.keys[session.key].expiresAt });
+
+    const agora = Date.now();
+    const key = generateKey();
+    db.keys[key] = { createdAt: new Date(agora).toISOString(), expiresAt: new Date(agora + KEY_TTL_MS).toISOString(), used: false, hwid: null };
+    saveDB(db); session.key = key;
+    return res.status(200).json({ ok: true, key, expiresAt: db.keys[key].expiresAt });
+  }
+
+  // Rota de validação (Delta)
+  if (req.url.startsWith('/api/validate')) {
+    const params = new URL(req.url, 'http://localhost').searchParams;
+    const key = String(params.get('key') || '').trim();
+    const hwid = params.get('hwid') ? String(params.get('hwid')).trim().slice(0, 128) : null;
+
+    if (!/^Zenix-[A-Z0-9]{6}$/.test(key)) return res.status(200).json({ valid: false, message: 'Formato de chave inválido.' });
+
+    const entry = db.keys[key];
+    if (!entry) return res.status(200).json({ valid: false, message: 'Chave não encontrada.' });
+    if (Date.now() > new Date(entry.expiresAt).getTime()) return res.status(200).json({ valid: false, message: 'Esta chave expirou (3 dias). Pegue uma nova no site.' });
+
+    if (hwid) {
+      if (entry.hwid && entry.hwid !== hwid) return res.status(200).json({ valid: false, message: 'Chave vinculada a outro dispositivo.' });
+      if (!entry.hwid) { entry.hwid = hwid; entry.used = true; saveDB(db); }
+    }
+    return res.status(200).json({ valid: true, message: 'Chave aceita!', expiresAt: entry.expiresAt });
+  }
+
+  res.status(404).json({ error: 'Rota não encontrada' });
+};
